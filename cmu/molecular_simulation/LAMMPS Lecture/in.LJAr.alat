@@ -1,0 +1,174 @@
+#-------------------------------------------------------------------------------------------------
+##################################MEASURE 0 PRESS ALAT############################################
+#-------------------------------------------------------------------------------------------------
+clear
+#------------READ STRUCTURE-----------------------------------------------------------------------
+units			lj					##Use LJ units sigma_Ar, eps_Ar, tau_Ar
+atom_style		atomic					##Specifies how many columns in data in
+read_data		LJ.4x4x4.in.data			##Specifies input data file with "atomic"
+#read_restart 	ljNVE.restart.1000000	
+mass           	1  1.0					##Specifies mass again, not really needed
+group         	Ar type = 1				##Gives a label to atome type=1 "Ar"
+#------------LJ POTENTIALS------------------------------------------------------------------------
+pair_style		lj/cut 2.5				##LJ with cutoff a=2.5
+pair_coeff		1 1 1.0 1.0				##atomi atomj epsilon sigma
+pair_modify          shift yes				##Shift PE at cutoff to 0.0
+
+##USED TO SPECIFY MULTIPLE SPECIES
+##pair_style		lj/cut 2.5
+##pair_coeff		1 2 1.0 1.0
+##pair_modify        shift yes
+
+##pair_style		lj/cut 2.5
+##pair_coeff		2 2 1.0 1.0
+##pair_modify        shift yes
+
+#pair_modify   	tail no				##This is default so not needed
+#------------LJ PARAMETERS-----------------------------------------------------------------------
+variable    	kB 		equal 1.3806504e-23 		# [J/K] Boltzmann
+variable	sigma_Ar 	equal 3.4e-10 		# m
+variable	eps_Ar		equal 1.67e-21		# J
+variable	mass_Ar	equal 6.63e-26		# kg
+variable	tau_Ar		equal 2.1423e-12		# s
+#------------THERMO PARAMETERS-------------------------------------------------------------------
+variable    	T_melt 	equal 300*(${kB}/${eps_Ar})
+variable	T_0K		equal 0.001
+#variable	T_run		equal 15*(${kB}/${eps_Ar})
+#variable    	V 		equal vol
+variable   	dt 		equal 0.002
+variable	run_length	equal 500000
+variable	Tau_T		equal 1.0
+variable	Tau_P		equal 10.0
+variable	seed		equal 99999
+#------------SAMPLE PARAMETERS-------------------------------------------------------------------
+variable    	p 		equal 100 			# correlation length
+variable    	s 		equal 10  			# sample interval
+variable    	d 		equal $p*$s 			# dump interval 
+
+
+#START LOOP 1
+
+    label loop1
+    variable a loop 8
+    variable T_run index 0.082670659 0.165341317 0.248011976 0.330682635 0.413353293 0.496023952 &
+    0.578694611 0.661365269
+
+    log 	log_${a}.lammps
+
+    #------------START NPT HEAT -------------------------------------------------------------------
+
+        reset_timestep  	0
+
+            ##IF FIRST T_run CREATE INITIAL VEL
+
+                ##if "${a}<2" then "velocity all create ${T_run} ${seed} rot yes dist gaussian"
+            	velocity all create ${T_run} ${seed} rot yes dist gaussian
+
+    ##START  
+            ##RUN A PREPARATION NPT
+                ##SET ENSEMBLE TO NPT
+
+                fix 			1 all npt temp ${T_run} ${T_run} ${Tau_T} iso press 0.0 ${Tau_P}
+                thermo_style  	custom step temp press vol etotal pe ke
+                thermo		1000
+
+                ##OPTIONAL DUMP POSITIONS
+
+                ##dump 			xyz all xyz ${run_length} npt_heat_$a.dump
+
+                run             	50000
+    		  #run 		1000
+                unfix 			1
+    ##STOP
+
+        #----------CALCULATE AVG CELL SIZE---------------------------------------------------------
+
+    ##START  
+            ##RUN NPT FOR CELL SIZE
+                fix 			1 all npt temp ${T_run} ${T_run} ${Tau_T} iso press 0.0 ${Tau_P}
+
+                ##SET myLx EQUAL TO THE X_DIM BOX SIZE
+
+                variable  		myLx equal xhi-xlo
+
+                ##CREATE A FIX WHICH AVERAGES THE X-DIM BOX SIZE OVER TIME
+
+                fix 			myLx all ave/time ${p} ${s} ${d} v_myLx file Lx.profile$a
+
+                ##SET ANOTHER VARIABLE myLx2 EQUAL TO THE TIME AVERAGED X-BOX DIM
+
+                variable		myLx2 equal f_myLx
+
+                ##DO FOR Y AND Z DIRECTIONS AS WELL
+
+                variable  		myLy equal yhi-ylo
+                fix 			myLy all ave/time ${p} ${s} ${d} v_myLy file Ly.profile$a
+                variable		myLy2 equal f_myLy
+                variable  		myLz equal zhi-zlo
+                fix 			myLz all ave/time ${p} ${s} ${d} v_myLz file Lz.profile$a
+                variable		myLz2 equal f_myLz
+
+            ##REPORT THERMO DATA EVERY thermo NUMBER TIME STEPS
+
+                thermo_style  	custom step temp press vol etotal pe ke #v_myLx2 v_myLy2 v_myLz2 
+                thermo		1000
+
+            ##RUN THE ENSEMBLE FOR THIS MANY TIME STEPS
+
+                run			100000
+    		  #run			5000
+
+            ##UNLOCK THE DUMP AND FIX COMMANDS SO THEY CAN BE USED AGAIN LATER
+
+                unfix 			1
+    ##STOP 
+
+    ##START  
+            ##THE FINAL TEIM AVG myL(x,y,z)2 USED TO RELAX SIM BOX TO ABOVE AVG LATTICE CONTANTS
+
+                fix 			deform all deform 1 x final 0.0 ${myLx2} y final 0.0 ${myLx2} z final 0.0 ${myLx2} units box
+
+            ##RELAX THE SIM BOX OVER THIS MANY TIME STEPS
+
+                run			10000
+                #run			1000
+ 
+            ##UNLOCK FIXED AND COMPUTES TO USE LATER
+
+                unfix		deform
+                unfix		myLx
+                unfix           	myLy
+                unfix           	myLz
+    ##STOP               
+
+    #------------STOP NPT HEAT --------------------------------------------------------------------
+
+
+    #------------ START NVT equil -----------------------------------------------------------------
+
+    ##START  
+            ##RUN A PREPARATION NVT
+                ##SET ENSEMBLE TO NVT
+                fix 			1 all nvt temp ${T_run} ${T_run} ${Tau_T}
+                thermo_style  	custom step temp press vol etotal pe ke
+                thermo		1000
+                run             	50000
+     		  #run			1000
+                unfix 		1
+    ##STOP
+
+    ##START
+            ##COLLET NVT DATA FOR Cv
+                fix 			1 all nvt temp ${T_run} ${T_run} ${Tau_T}
+                thermo_style  	custom step temp press vol etotal pe ke 
+                thermo		1000
+                run             	100000
+    		  #run             	5000
+                unfix           	1 
+    ##STOP
+
+next T_run
+next a
+jump in.LJAr.alat loop1
+
+#END LOOP 1
